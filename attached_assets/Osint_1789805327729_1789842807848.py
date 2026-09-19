@@ -26,7 +26,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 log = logging.getLogger("OSINT")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+# Railway projects commonly use BOT_TOKEN; TELEGRAM_TOKEN remains supported.
+TELEGRAM_TOKEN = (
+    os.getenv("TELEGRAM_TOKEN", "").strip()
+    or os.getenv("BOT_TOKEN", "").strip()
+)
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YourOsintBot").strip()
 
@@ -2116,7 +2120,10 @@ async def on_shutdown(app):
 
 def main():
     if not TELEGRAM_TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN is required. Add it to Railway Variables.")
+        raise RuntimeError(
+            "Telegram bot token is required. Add TELEGRAM_TOKEN or BOT_TOKEN "
+            "to Railway Variables."
+        )
     if not OWNER_ID:
         raise RuntimeError("OWNER_ID is required. Add it to Railway Variables.")
 
