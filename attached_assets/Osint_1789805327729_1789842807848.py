@@ -31,6 +31,8 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YourOsintBot").strip()
 
 PAID_API_BASE = os.getenv("PAID_API_BASE", "https://paid-apis.vercel.app/api").rstrip("/")
+# Each lookup service can use its own API key. PAID_API_KEY remains as a
+# backwards-compatible fallback for deployments that still use one shared key.
 PAID_API_KEY = os.getenv("PAID_API_KEY", "").strip()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -45,6 +47,12 @@ DEFAULT_REFER_BONUS = 5
 
 HTTP_SESSION = None
 EXECUTOR = ThreadPoolExecutor(max_workers=10)
+
+
+def get_service_api_key(service_key):
+    """Return the service-specific key, falling back to the legacy shared key."""
+    specific_key = os.getenv(f"{service_key.upper()}_API_KEY", "").strip()
+    return specific_key or PAID_API_KEY
 
 
 # ──────────────────── DB ──────────────────────
@@ -1693,10 +1701,20 @@ async def run_service(update, context, svc_key, text, u):
             parts.scheme, parts.netloc, parts.path, urlencode(configured_params), parts.fragment
         ))
 
-        # Paid API needs api_key
+        # Paid API needs the key belonging to this specific lookup service.
         params = {}
         if PAID_API_BASE in request_url:
-            params["api_key"] = PAID_API_KEY
+            service_api_key = get_service_api_key(svc_key)
+            if service_api_key:
+                params["api_key"] = service_api_key
+            else:
+                await edit_safe(
+                    processing,
+                    "❌ This service is not configured yet. "
+                    f"Add `{svc_key.upper()}_API_KEY` in Railway Variables.",
+                    kb=back_kb()
+                )
+                return
 
         raw = await api_get(request_url, params)
         parser = PARSERS.get(svc["parser"], PARSERS["generic"])
