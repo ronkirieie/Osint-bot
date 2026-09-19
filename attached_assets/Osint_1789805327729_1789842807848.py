@@ -1025,7 +1025,9 @@ def fmt_number(data):
 
 def fmt_aadhar(data):
     if not data.get("success"):
-        return f"❌ *Lookup failed*\n`{data.get('error', 'unknown')}`"
+        if data.get("count") == 0 or data.get("total") == 0:
+            return f"❌ *No matching Aadhaar record found*\n`{data.get('number', '?')}`"
+        return f"❌ *Lookup failed*\n`{data.get('error') or 'unknown'}`"
     results = data.get("results", [])
     if not results:
         return f"❌ *No data found*\n`{data.get('number', '?')}`"
@@ -1762,11 +1764,10 @@ async def run_service(update, context, svc_key, text, u):
                 cleaned = cleaned[-10:] if len(cleaned) >= 10 else cleaned
         elif svc_key == "aadhar":
             cleaned = "".join(c for c in text if c.isdigit())
-            if len(cleaned) != 10:
+            if len(cleaned) not in (10, 12):
                 await update.message.reply_text(
-                    "❌ This Aadhar API accepts a 10-digit mobile number.\n\n"
-                    "Send the mobile number linked to the Aadhar record, "
-                    "not a 12-digit Aadhar number.",
+                    "❌ Send either a 10-digit mobile number or a 12-digit "
+                    "Aadhaar number.",
                     reply_markup=back_kb()
                 )
                 return
