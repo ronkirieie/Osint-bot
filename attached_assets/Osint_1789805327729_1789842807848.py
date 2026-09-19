@@ -44,6 +44,22 @@ NUMBER_API_URL = os.getenv(
 ).strip()
 NUMBER_API_PARAM = os.getenv("NUMBER_API_PARAM", "num").strip()
 NUMBER_API_KEY_PARAM = os.getenv("NUMBER_API_KEY_PARAM", "key").strip()
+AADHAR_API_URL = os.getenv(
+    "AADHAR_API_URL",
+    f"{PAID_API_BASE}/aadhar"
+).strip()
+VEHICLE_API_URL = os.getenv(
+    "VEHICLE_API_URL",
+    "https://drift-vehicle-info.vercel.app/vehicle"
+).strip()
+IFSC_API_URL = os.getenv(
+    "IFSC_API_URL",
+    f"{PAID_API_BASE}/ifsc"
+).strip()
+GST_API_URL = os.getenv(
+    "GST_API_URL",
+    f"{PAID_API_BASE}/gst"
+).strip()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
@@ -67,11 +83,13 @@ def get_service_api_key(service_key):
 
 def get_service_api_key_param(service_key):
     """Return the query-string name expected by each service's API."""
-    if service_key == "number":
-        return NUMBER_API_KEY_PARAM
+    defaults = {
+        "number": NUMBER_API_KEY_PARAM,
+        "vehicle": "key",
+    }
     return os.getenv(
         f"{service_key.upper()}_API_KEY_PARAM",
-        "api_key"
+        defaults.get(service_key, "api_key")
     ).strip()
 
 
@@ -201,10 +219,10 @@ def init_db():
     # Seed default services (only inserts if not exist)
     default_services = [
         ("number",  "Number Info",  "🔍", NUMBER_API_URL,  NUMBER_API_PARAM, 1, 1, 10, "numinfo"),
-        ("aadhar",  "Aadhar Info",  "🆔", f"{PAID_API_BASE}/numinfo", "number", 2, 1, 20, "numinfo"),
-        ("vehicle", "Vehicle Info", "🚗", f"{PAID_API_BASE}/vehicle", "number", 3, 1, 30, "vehicle"),
-        ("ifsc",    "IFSC Info",    "🏦", f"{PAID_API_BASE}/ifsc",    "ifsc",   1, 1, 40, "ifsc"),
-        ("gst",     "GST Info",     "📋", f"{PAID_API_BASE}/gst",     "gstin",  2, 1, 50, "gst"),
+        ("aadhar",  "Aadhar Info",  "🆔", AADHAR_API_URL, "number", 2, 1, 20, "numinfo"),
+        ("vehicle", "Vehicle Info", "🚗", VEHICLE_API_URL, "rc", 3, 1, 30, "vehicle"),
+        ("ifsc",    "IFSC Info",    "🏦", IFSC_API_URL,    "ifsc",   1, 1, 40, "ifsc"),
+        ("gst",     "GST Info",     "📋", GST_API_URL,     "gstin",  2, 1, 50, "gst"),
     ]
     for key, label, emoji, endpoint, param, cost, enabled, order, parser in default_services:
         c.execute('''INSERT INTO services
@@ -227,6 +245,20 @@ def init_db():
             (NUMBER_API_URL, NUMBER_API_PARAM)
         )
         log.info("Migration: Number service endpoint configured")
+
+    configured_service_urls = {
+        "aadhar": (AADHAR_API_URL, "number"),
+        "vehicle": (VEHICLE_API_URL, "rc"),
+        "ifsc": (IFSC_API_URL, "ifsc"),
+        "gst": (GST_API_URL, "gstin"),
+    }
+    for service_key, (endpoint, param_name) in configured_service_urls.items():
+        if os.getenv(f"{service_key.upper()}_API_URL", "").strip():
+            c.execute(
+                "UPDATE services SET endpoint = ?, param_name = ? WHERE key = ?",
+                (endpoint, param_name, service_key)
+            )
+            log.info(f"Migration: {service_key} service endpoint configured")
 
     # Migrate the original Aadhar/Titan service to the paid numinfo API.
     old_aadhar = c.execute(
@@ -1738,15 +1770,22 @@ async def run_service(update, context, svc_key, text, u):
 
         # Paid API needs the key belonging to this specific lookup service.
         params = {}
-        if PAID_API_BASE in request_url or svc_key == "number":
+        authenticated_service = svc_key in {"number", "aadhar", "vehicle", "ifsc", "gst"}
+        if authenticated_service or PAID_API_BASE in request_url:
+            # If the complete Railway URL already contains key/api_key, keep
+            # that embedded credential and do not require a separate variable.
+            configured_key_param = get_service_api_key_param(svc_key)
+            has_embedded_key = bool(configured_params.get(configured_key_param))
             service_api_key = get_service_api_key(svc_key)
-            if service_api_key:
-                params[get_service_api_key_param(svc_key)] = service_api_key
+            if has_embedded_key:
+                pass
+            elif service_api_key:
+                params[configured_key_param] = service_api_key
             else:
                 await edit_safe(
                     processing,
-                    "❌ This service is not configured yet. "
-                    f"Add `{svc_key.upper()}_API_KEY` in Railway Variables.",
+                    "❌ This service is not configured yet. Add the complete "
+                    f"`{svc_key.upper()}_API_URL` (including its key) in Railway Variables.",
                     kb=back_kb()
                 )
                 return
