@@ -42,15 +42,15 @@ NUMBER_API_URL = os.getenv(
     "NUMBER_API_URL",
     "https://numinfotitan.vercel.app/search"
 ).strip()
-NUMBER_API_PARAM = os.getenv("NUMBER_API_PARAM", "num").strip()
-NUMBER_API_KEY_PARAM = os.getenv("NUMBER_API_KEY_PARAM", "key").strip()
+NUMBER_API_PARAM = os.getenv("NUMBER_API_PARAM", "").strip()
+NUMBER_API_KEY_PARAM = os.getenv("NUMBER_API_KEY_PARAM", "").strip()
 AADHAR_API_URL = os.getenv(
     "AADHAR_API_URL",
     f"{PAID_API_BASE}/aadhar"
 ).strip()
 VEHICLE_API_URL = os.getenv(
     "VEHICLE_API_URL",
-    "https://drift-vehicle-info.vercel.app/vehicle"
+    f"{PAID_API_BASE}/vehicle"
 ).strip()
 IFSC_API_URL = os.getenv(
     "IFSC_API_URL",
@@ -81,12 +81,41 @@ def get_service_api_key(service_key):
     return specific_key or PAID_API_KEY
 
 
-def get_service_api_key_param(service_key):
+def get_service_input_param(service_key, endpoint=None, fallback=None):
+    """Infer the lookup parameter from the configured URL when possible."""
+    explicit = os.getenv(f"{service_key.upper()}_API_PARAM", "").strip()
+    if explicit:
+        return explicit
+
+    candidates = {
+        "number": ("num", "number"),
+        "aadhar": ("number",),
+        "vehicle": ("rc", "number"),
+        "ifsc": ("ifsc",),
+        "gst": ("gstin",),
+    }.get(service_key, ())
+    if endpoint:
+        query_keys = {key for key, _ in parse_qsl(urlsplit(endpoint).query, keep_blank_values=True)}
+        for candidate in candidates:
+            if candidate in query_keys:
+                return candidate
+    return fallback or (candidates[0] if candidates else "value")
+
+
+def get_service_api_key_param(service_key, endpoint=None):
     """Return the query-string name expected by each service's API."""
     defaults = {
-        "number": NUMBER_API_KEY_PARAM,
-        "vehicle": "key",
+        "number": NUMBER_API_KEY_PARAM or "key",
+        "vehicle": "api_key",
     }
+    explicit = os.getenv(f"{service_key.upper()}_API_KEY_PARAM", "").strip()
+    if explicit:
+        return explicit
+    if endpoint:
+        query_keys = {key for key, _ in parse_qsl(urlsplit(endpoint).query, keep_blank_values=True)}
+        for candidate in ("key", "api_key"):
+            if candidate in query_keys:
+                return candidate
     return os.getenv(
         f"{service_key.upper()}_API_KEY_PARAM",
         defaults.get(service_key, "api_key")
@@ -218,9 +247,9 @@ def init_db():
 
     # Seed default services (only inserts if not exist)
     default_services = [
-        ("number",  "Number Info",  "🔍", NUMBER_API_URL,  NUMBER_API_PARAM, 1, 1, 10, "numinfo"),
+        ("number",  "Number Info",  "🔍", NUMBER_API_URL,  get_service_input_param("number", NUMBER_API_URL, "num"), 1, 1, 10, "numinfo"),
         ("aadhar",  "Aadhar Info",  "🆔", AADHAR_API_URL, "number", 2, 1, 20, "numinfo"),
-        ("vehicle", "Vehicle Info", "🚗", VEHICLE_API_URL, "rc", 3, 1, 30, "vehicle"),
+        ("vehicle", "Vehicle Info", "🚗", VEHICLE_API_URL, get_service_input_param("vehicle", VEHICLE_API_URL, "number"), 3, 1, 30, "vehicle"),
         ("ifsc",    "IFSC Info",    "🏦", IFSC_API_URL,    "ifsc",   1, 1, 40, "ifsc"),
         ("gst",     "GST Info",     "📋", GST_API_URL,     "gstin",  2, 1, 50, "gst"),
     ]
@@ -242,13 +271,13 @@ def init_db():
     ):
         c.execute(
             "UPDATE services SET endpoint = ?, param_name = ? WHERE key = 'number'",
-            (NUMBER_API_URL, NUMBER_API_PARAM)
+            (NUMBER_API_URL, get_service_input_param("number", NUMBER_API_URL, "num"))
         )
         log.info("Migration: Number service endpoint configured")
 
     configured_service_urls = {
         "aadhar": (AADHAR_API_URL, "number"),
-        "vehicle": (VEHICLE_API_URL, "rc"),
+        "vehicle": (VEHICLE_API_URL, get_service_input_param("vehicle", VEHICLE_API_URL, "number")),
         "ifsc": (IFSC_API_URL, "ifsc"),
         "gst": (GST_API_URL, "gstin"),
     }
@@ -1774,7 +1803,7 @@ async def run_service(update, context, svc_key, text, u):
         if authenticated_service or PAID_API_BASE in request_url:
             # If the complete Railway URL already contains key/api_key, keep
             # that embedded credential and do not require a separate variable.
-            configured_key_param = get_service_api_key_param(svc_key)
+            configured_key_param = get_service_api_key_param(svc_key, svc["endpoint"])
             has_embedded_key = bool(configured_params.get(configured_key_param))
             service_api_key = get_service_api_key(svc_key)
             if has_embedded_key:
