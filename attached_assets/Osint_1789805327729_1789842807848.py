@@ -38,6 +38,12 @@ PAID_API_BASE = os.getenv("PAID_API_BASE", "https://paid-apis.vercel.app/api").r
 # Each lookup service can use its own API key. PAID_API_KEY remains as a
 # backwards-compatible fallback for deployments that still use one shared key.
 PAID_API_KEY = os.getenv("PAID_API_KEY", "").strip()
+NUMBER_API_URL = os.getenv(
+    "NUMBER_API_URL",
+    "https://numinfotitan.vercel.app/search"
+).strip()
+NUMBER_API_PARAM = os.getenv("NUMBER_API_PARAM", "num").strip()
+NUMBER_API_KEY_PARAM = os.getenv("NUMBER_API_KEY_PARAM", "key").strip()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
@@ -57,6 +63,16 @@ def get_service_api_key(service_key):
     """Return the service-specific key, falling back to the legacy shared key."""
     specific_key = os.getenv(f"{service_key.upper()}_API_KEY", "").strip()
     return specific_key or PAID_API_KEY
+
+
+def get_service_api_key_param(service_key):
+    """Return the query-string name expected by each service's API."""
+    if service_key == "number":
+        return NUMBER_API_KEY_PARAM
+    return os.getenv(
+        f"{service_key.upper()}_API_KEY_PARAM",
+        "api_key"
+    ).strip()
 
 
 # ──────────────────── DB ──────────────────────
@@ -184,7 +200,7 @@ def init_db():
 
     # Seed default services (only inserts if not exist)
     default_services = [
-        ("number",  "Number Info",  "🔍", f"{PAID_API_BASE}/numinfo",  "number", 1, 1, 10, "numinfo"),
+        ("number",  "Number Info",  "🔍", NUMBER_API_URL,  NUMBER_API_PARAM, 1, 1, 10, "numinfo"),
         ("aadhar",  "Aadhar Info",  "🆔", f"{PAID_API_BASE}/numinfo", "number", 2, 1, 20, "numinfo"),
         ("vehicle", "Vehicle Info", "🚗", f"{PAID_API_BASE}/vehicle", "number", 3, 1, 30, "vehicle"),
         ("ifsc",    "IFSC Info",    "🏦", f"{PAID_API_BASE}/ifsc",    "ifsc",   1, 1, 40, "ifsc"),
@@ -196,6 +212,21 @@ def init_db():
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT (key) DO NOTHING''',
                   (key, label, emoji, endpoint, param, cost, enabled, order, parser))
+
+    # Migrate the original default number endpoint to the configured Titan
+    # endpoint. A custom endpoint is respected through NUMBER_API_URL.
+    current_number = c.execute(
+        "SELECT endpoint, param_name FROM services WHERE key = 'number'"
+    ).fetchone()
+    if current_number and (
+        current_number[0] == f"{PAID_API_BASE}/numinfo"
+        or os.getenv("NUMBER_API_URL", "").strip()
+    ):
+        c.execute(
+            "UPDATE services SET endpoint = ?, param_name = ? WHERE key = 'number'",
+            (NUMBER_API_URL, NUMBER_API_PARAM)
+        )
+        log.info("Migration: Number service endpoint configured")
 
     # Migrate the original Aadhar/Titan service to the paid numinfo API.
     old_aadhar = c.execute(
@@ -1707,10 +1738,10 @@ async def run_service(update, context, svc_key, text, u):
 
         # Paid API needs the key belonging to this specific lookup service.
         params = {}
-        if PAID_API_BASE in request_url:
+        if PAID_API_BASE in request_url or svc_key == "number":
             service_api_key = get_service_api_key(svc_key)
             if service_api_key:
-                params["api_key"] = service_api_key
+                params[get_service_api_key_param(svc_key)] = service_api_key
             else:
                 await edit_safe(
                     processing,
